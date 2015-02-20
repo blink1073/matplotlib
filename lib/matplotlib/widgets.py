@@ -1199,10 +1199,16 @@ class _SelectorWidget(AxesWidget):
         """Limit the xdata and ydata to the axes limits"""
         x0, x1 = self.ax.get_xbound()
         y0, y1 = self.ax.get_ybound()
-        xdata = max(x0, event.xdata)
-        xdata = min(x1, xdata)
-        ydata = max(y0, event.ydata)
-        ydata = min(y1, ydata)
+        if event.xdata is None:
+            xdata = None
+        else:
+            xdata = max(x0, event.xdata)
+            xdata = min(x1, xdata)
+        if event.ydata is None:
+            ydata = None
+        else:
+            ydata = max(y0, event.ydata)
+            ydata = min(y1, ydata)
         return xdata, ydata
 
     def press(self, event):
@@ -1411,13 +1417,14 @@ class SpanSelector(_SelectorWidget):
         """on motion notify event"""
         if self.pressv is None or self.ignore(event):
             return
+        if event.xdata is None or event.ydata is None:
+            return
         x, y = self._get_data(event)
         self.prev = x, y
         if self.direction == 'horizontal':
             v = x
         else:
             v = y
-
         minv, maxv = v, self.pressv
         if minv > maxv:
             minv, maxv = maxv, minv
