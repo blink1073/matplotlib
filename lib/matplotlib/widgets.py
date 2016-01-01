@@ -1136,12 +1136,11 @@ class MultiCursor(Widget):
 class _SelectorWidget(AxesWidget):
 
     def __init__(self, ax, onselect, useblit=False, button=None,
-                 state_modifier_keys=None, interactive=False):
+                 state_modifier_keys=None):
         AxesWidget.__init__(self, ax)
 
         self.visible = True
         self.onselect = onselect
-        self.interactive = interactive
         self.useblit = useblit and self.canvas.supports_blit
         self.connect_default_events()
 
@@ -1163,6 +1162,8 @@ class _SelectorWidget(AxesWidget):
         self.eventrelease = None
         self._prev_event = None
         self.state = set()
+
+        self._override_press = False
 
     def set_active(self, active):
         AxesWidget.set_active(self, active)
@@ -1188,7 +1189,7 @@ class _SelectorWidget(AxesWidget):
 
     def ignore(self, event):
         """return *True* if *event* should be ignored"""
-        if not self.active or not self.ax.get_visible() or not self.visible:
+        if not self.active or not self.ax.get_visible():
             return True
 
         # If canvas was locked
@@ -1234,6 +1235,7 @@ class _SelectorWidget(AxesWidget):
                 self.ax.draw_artist(artist)
 
             self.canvas.blit(self.ax.bbox)
+
         else:
             self.canvas.draw_idle()
         return False
@@ -1269,6 +1271,7 @@ class _SelectorWidget(AxesWidget):
     def press(self, event):
         """Button press handler and validator"""
         if not self.ignore(event):
+            self._override_press = False
             event = self._clean_event(event)
             self.eventpress = event
             self._prev_event = event
@@ -1277,10 +1280,8 @@ class _SelectorWidget(AxesWidget):
             # move state is locked in on a button press
             if key == self.state_modifier_keys['move']:
                 self.state.add('move')
-            if self._press(event):
-                return True
-            else:
-                self.eventpress = None
+            self._press(event)
+            return True
         return False
 
     def _press(self, event):
@@ -1292,14 +1293,11 @@ class _SelectorWidget(AxesWidget):
         if not self.ignore(event) and self.eventpress:
             event = self._clean_event(event)
             self.eventrelease = event
-            if self._release(event):
-                self.eventpress = None
-                self.eventrelease = None
-                self.state.discard('move')
-                if not self.interactive:
-                    self._set_visible(False)
-                self.update()
-                return True
+            self._release(event)
+            self.eventpress = None
+            self.eventrelease = None
+            self.state.discard('move')
+            return True
         return False
 
     def _release(self, event):
@@ -1308,12 +1306,11 @@ class _SelectorWidget(AxesWidget):
 
     def onmove(self, event):
         """Cursor move event handler and validator"""
-        if not self.ignore(event) and self.eventpress:
+        valid_press = self.eventpress or self._override_press
+        if not self.ignore(event) and valid_press:
             event = self._clean_event(event)
-            if self._onmove(event):
-                self._set_visible(True)
-                self.update()
-                return True
+            self._onmove(event)
+            return True
         return False
 
     def _onmove(self, event):
@@ -1335,9 +1332,10 @@ class _SelectorWidget(AxesWidget):
             key = event.key or ''
             key = key.replace('ctrl', 'control')
             if key == self.state_modifier_keys['clear']:
-                self._set_visible(False)
-                self.eventpress = None
+                for artist in self.artists:
+                    artist.set_visible(False)
                 self.update()
+                self.eventpress = None
                 return
             for (state, modifier) in self.state_modifier_keys.items():
                 if modifier in key:
@@ -1367,10 +1365,9 @@ class _SelectorWidget(AxesWidget):
         self.visible = visible
         for artist in self.artists:
             artist.set_visible(visible)
-        self.update()
 
     def _set_visible(self, visible):
-        """ Set the visibility of our artists temporarily """
+        """ Temporarily set the visibility of our artists """
         for artist in self.artists:
             artist.set_visible(visible)
 
@@ -1398,7 +1395,7 @@ class SpanSelector(_SelectorWidget):
 
     def __init__(self, ax, onselect, direction, minspan=None, useblit=False,
                  rectprops=None, onmove_callback=None, span_stays=False,
-                 button=None, interactive=False):
+                 button=None):
         """
         Create a span selector in *ax*.  When a selection is made, clear
         the span and call *onselect* with::
@@ -1432,9 +1429,8 @@ class SpanSelector(_SelectorWidget):
          3 = right mouse button
 
         """
-        interactive = interactive or span_stays
         _SelectorWidget.__init__(self, ax, onselect, useblit=useblit,
-                                 button=button, interactive=interactive)
+                                 button=button)
 
         if rectprops is None:
             rectprops = dict(facecolor='red', alpha=0.5)
@@ -1452,6 +1448,7 @@ class SpanSelector(_SelectorWidget):
         self.rectprops = rectprops
         self.onmove_callback = onmove_callback
         self.minspan = minspan
+        self.span_stays = span_stays
 
         # Needed when dragging out of axes
         self.prev = (0, 0)
@@ -1481,25 +1478,53 @@ class SpanSelector(_SelectorWidget):
                               transform=trans,
                               visible=False,
                               **self.rectprops)
+        if self.span_stays:
+            self.stay_rect = Rectangle((0, 0), w, h,
+                                       transform=trans,
+                                       visible=False,
+                                       **self.rectprops)
+            self.stay_rect.set_animated(False)
+            self.ax.add_patch(self.stay_rect)
 
         self.ax.add_patch(self.rect)
         self.artists = [self.rect]
 
+    def ignore(self, event):
+        """return *True* if *event* should be ignored"""
+        return _SelectorWidget.ignore(self, event) or not self.visible
+
     def _press(self, event):
         """on button press event"""
+        self.rect.set_visible(self.visible)
+        if self.span_stays:
+            self.stay_rect.set_visible(False)
+            # really force a draw so that the stay rect is not in
+            # the blit background
+            if self.useblit:
+                self.canvas.draw()
         xdata, ydata = self._get_data(event)
         if self.direction == 'horizontal':
             self.pressv = xdata
         else:
             self.pressv = ydata
-        return True
+        return False
 
     def _release(self, event):
         """on button release event"""
         if self.pressv is None:
-            return False
+            return
         self.buttonDown = False
 
+        self.rect.set_visible(False)
+
+        if self.span_stays:
+            self.stay_rect.set_x(self.rect.get_x())
+            self.stay_rect.set_y(self.rect.get_y())
+            self.stay_rect.set_width(self.rect.get_width())
+            self.stay_rect.set_height(self.rect.get_height())
+            self.stay_rect.set_visible(True)
+
+        self.canvas.draw_idle()
         vmin = self.pressv
         xdata, ydata = self._get_data(event)
         if self.direction == 'horizontal':
@@ -1511,18 +1536,18 @@ class SpanSelector(_SelectorWidget):
             vmin, vmax = vmax, vmin
         span = vmax - vmin
         if self.minspan is not None and span < self.minspan:
-            return True
-        self.pressv = None
+            return
         self.onselect(vmin, vmax)
-        return True
+        self.pressv = None
+        return False
 
     def _onmove(self, event):
         """on motion notify event"""
         if self.pressv is None:
-            return False
+            return
         x, y = self._get_data(event)
         if x is None:
-            return False
+            return
 
         self.prev = x, y
         if self.direction == 'horizontal':
@@ -1551,7 +1576,9 @@ class SpanSelector(_SelectorWidget):
             if vmin > vmax:
                 vmin, vmax = vmax, vmin
             self.onmove_callback(vmin, vmax)
-        return True
+
+        self.update()
+        return False
 
 
 class ToolHandles(object):
@@ -1716,11 +1743,13 @@ class RectangleSelector(_SelectorWidget):
         'center': Make the initial point the center of the shape.
         'square' and 'center' can be combined.
         """
-        super(RectangleSelector, self).__init__(ax, onselect, useblit=useblit,
-                                 button=button, interactive=interactive,
+        _SelectorWidget.__init__(self, ax, onselect, useblit=useblit,
+                                 button=button,
                                  state_modifier_keys=state_modifier_keys)
 
         self.to_draw = None
+        self.visible = True
+        self.interactive = interactive
 
         if drawtype == 'none':
             drawtype = 'line'                        # draw a line but make it
@@ -1732,8 +1761,10 @@ class RectangleSelector(_SelectorWidget):
                                  alpha=0.2, fill=True)
             rectprops['animated'] = self.useblit
             self.rectprops = rectprops
-            self.to_draw = self._shape_klass((0, 0),
-                                     0, 1, visible=False, **self.rectprops)
+            self.to_draw = (
+                self._shape_klass((0, 0), 0, 1, visible=False,
+                                  **self.rectprops)
+            )
             self.ax.add_patch(self.to_draw)
         if drawtype == 'line':
             if lineprops is None:
@@ -1761,10 +1792,6 @@ class RectangleSelector(_SelectorWidget):
             props = dict(mec='r')
         else:
             props = dict(mec=rectprops.get('edgecolor', 'r'))
-
-        self._extents_on_press = None
-        self.active_handle = None
-
         self._corner_order = ['NW', 'NE', 'SE', 'SW']
         xc, yc = self.corners
         self._corner_handles = ToolHandles(self.ax, xc, yc, marker_props=props,
@@ -1781,6 +1808,8 @@ class RectangleSelector(_SelectorWidget):
                                           marker_props=props,
                                           useblit=self.useblit)
 
+        self.active_handle = None
+
         self.artists = [self.to_draw, self._center_handle.artist,
                         self._corner_handles.artist,
                         self._edge_handles.artist]
@@ -1788,7 +1817,7 @@ class RectangleSelector(_SelectorWidget):
         if not self.interactive:
             self.artists = [self.to_draw]
 
-        self._set_visible(False)
+        self._extents_on_press = None
 
     def _press(self, event):
         """on button press event"""
@@ -1798,10 +1827,18 @@ class RectangleSelector(_SelectorWidget):
             self._set_active_handle(event)
         else:
             self.active_handle = None
-        return True
+
+        if self.active_handle is None or not self.interactive:
+            # Clear previous rectangle before drawing new rectangle.
+            self.update()
+
+        self.set_visible(self.visible)
 
     def _release(self, event):
         """on button release event"""
+        if not self.interactive:
+            self.to_draw.set_visible(False)
+
         if self.spancoords == 'data':
             xmin, ymin = self.eventpress.xdata, self.eventpress.ydata
             xmax, ymax = self.eventrelease.xdata, self.eventrelease.ydata
@@ -1828,7 +1865,7 @@ class RectangleSelector(_SelectorWidget):
             # check if drawn distance (if it exists) is not too small in
             # neither x nor y-direction
             self.extents = [0, 0, 0, 0]
-            return True
+            return
 
         # update the eventpress and eventrelease with the resulting extents
         x1, x2, y1, y2 = self.extents
@@ -1841,8 +1878,11 @@ class RectangleSelector(_SelectorWidget):
         self.eventrelease.ydata = y2
         xy2 = self.ax.transData.transform_point([x2, y2])
         self.eventrelease.x, self.eventrelease.y = xy2
+        # call desired function
         self.onselect(self.eventpress, self.eventrelease)
-        return True
+        self.update()
+
+        return False
 
     def _onmove(self, event):
         """on motion notify event if box/line is wanted"""
@@ -1855,8 +1895,8 @@ class RectangleSelector(_SelectorWidget):
                 y2 = event.ydata
 
         # move existing shape
-        elif (('move' in self.state or self.active_handle == 'C')
-              and self._extents_on_press is not None):
+        elif (('move' in self.state or self.active_handle == 'C') and
+              self._extents_on_press is not None):
             x1, x2, y1, y2 = self._extents_on_press
             dx = event.xdata - self.eventpress.xdata
             dy = event.ydata - self.eventpress.ydata
@@ -1877,7 +1917,7 @@ class RectangleSelector(_SelectorWidget):
                 dx_pix = abs(event.x - center_pix[0])
                 dy_pix = abs(event.y - center_pix[1])
                 if not dx_pix:
-                    return True
+                    return
                 maxd = max(abs(dx_pix), abs(dy_pix))
                 if abs(dx_pix) < maxd:
                     dx *= maxd / (abs(dx_pix) + 1e-6)
@@ -1898,7 +1938,6 @@ class RectangleSelector(_SelectorWidget):
                               center[1] - dy, center[1] + dy)
 
         self.extents = x1, x2, y1, y2
-        return True
 
     @property
     def _rect_bbox(self):
@@ -1954,6 +1993,7 @@ class RectangleSelector(_SelectorWidget):
         self._corner_handles.set_data(*self.corners)
         self._edge_handles.set_data(*self.edge_centers)
         self._center_handle.set_data(*self.center)
+        self.set_visible(self.visible)
         self.update()
 
     def draw_shape(self, extents):
@@ -2110,6 +2150,14 @@ class LassoSelector(_SelectorWidget):
     *onselect* : function
         Whenever the lasso is released, the `onselect` function is called and
         passed the vertices of the selected path.
+    *persist*: boolean
+        Whether to leave the lasso drawn until the next one is drawn.
+
+    *state_modifier_keys* are keyboard modifiers that affect the behavior
+        of the widget.
+
+        The defaults are:
+        dict(polygon='shift', clear='escape')
 
     Example usage::
 
@@ -2133,9 +2181,12 @@ class LassoSelector(_SelectorWidget):
     """
 
     def __init__(self, ax, onselect=None, useblit=True, lineprops=None,
-            button=None):
-        _SelectorWidget.__init__(self, ax, onselect, useblit=useblit, button=button)
+                 button=None, persist=False, state_modifier_keys=None):
+        _SelectorWidget.__init__(self, ax, onselect, useblit=useblit,
+                                 button=button,
+                                 state_modifier_keys=state_modifier_keys)
 
+        self.state_modifier_keys.setdefault('polygon', 'shift')
         self.verts = None
 
         if lineprops is None:
@@ -2146,32 +2197,61 @@ class LassoSelector(_SelectorWidget):
         self.line.set_visible(False)
         self.ax.add_line(self.line)
         self.artists = [self.line]
+        self.persist = persist
 
     def onpress(self, event):
         self.press(event)
 
     def _press(self, event):
-        self.verts = [self._get_data(event)]
-        self.line.set_visible(True)
+        if (not event.key == self.state_modifier_keys['polygon'] or
+                self.verts is None):
+            self.verts = [(event.xdata, event.ydata)]
+
+    def _on_key_release(self, event):
+        if event.key == self.state_modifier_keys['polygon']:
+            if self._override_press:
+                self._finish(event)
 
     def onrelease(self, event):
         self.release(event)
 
-    def _release(self, event):
-        if self.verts is not None:
-            self.verts.append(self._get_data(event))
-            self.onselect(self.verts)
-        self.line.set_data([[], []])
-        self.line.set_visible(False)
+    def _finish(self, event):
+        self.verts.append(self.verts[0])
+        self.line.set_data(list(zip(*self.verts)))
+        self.onselect(self.verts)
+        if not self.persist:
+            self.line.set_data([[], []])
+            self.line.set_visible(False)
+            self._override_press = False
         self.verts = None
+        self.update()
+
+    def _release(self, event):
+        if self.verts is None:
+            return
+        self.verts.append((event.xdata, event.ydata))
+        if event.key != self.state_modifier_keys['polygon']:
+            self._finish(event)
+        else:
+            self._override_press = True
+            self.verts.append((event.xdata, event.ydata))
+            self.line.set_data(list(zip(*self.verts)))
+            self.update()
 
     def _onmove(self, event):
         if self.verts is None:
             return
-        self.verts.append(self._get_data(event))
-
+        self.line.set_visible(True)
+        if event.key == self.state_modifier_keys['polygon']:
+            if len(self.verts) == 1:
+                self.verts.append((event.xdata, event.ydata))
+            else:
+                self.verts[-1] = (event.xdata, event.ydata)
+        elif event.button:
+            self.verts.append((event.xdata, event.ydata))
+        else:
+            return self._finish(event)
         self.line.set_data(list(zip(*self.verts)))
-
         self.update()
 
 
@@ -2295,9 +2375,10 @@ class LineSelector(_SelectorWidget):
                  state_modifier_keys=None):
 
         super(LineSelector, self).__init__(ax, onselect,
-            useblit=useblit,  button=button, interactive=interactive,
+            useblit=useblit,  button=button,
             state_modifier_keys=state_modifier_keys)
 
+        self.interactive = interactive
         props = dict(color='black', linestyle='-', linewidth=2, alpha=0.5)
         props.update(lineprops if lineprops is not None else {})
         self.maxdist = maxdist
@@ -2324,7 +2405,13 @@ class LineSelector(_SelectorWidget):
     @end_points.setter
     def end_points(self, pts):
         self._end_pts = pts = np.asarray(pts)
-        self._update_points()
+        self._line.set_data(np.transpose(pts))
+
+        if self.interactive:
+            self._center = center = (pts[1] + pts[0]) / 2.
+            handle_pts = np.vstack((pts[0], center, pts[1])).T
+            self._handles.set_data(handle_pts)
+
         self.update()
 
     def _press(self, event):
@@ -2344,16 +2431,15 @@ class LineSelector(_SelectorWidget):
             self._active_pt = 0
             x, y = event.xdata, event.ydata
             self._end_pts = np.array([[x, y], [x, y]])
-        return True
 
     def _release(self, event):
         self._active_pt = None
         self.onselect(self.eventpress, self.eventrelease)
-        return True
 
     def _onmove(self, event):
         if self._active_pt is None:
-            return False
+            return
+        self._set_visible(True)
         x, y, = event.xdata, event.ydata
         if x is not None:
             # check for center
@@ -2365,8 +2451,7 @@ class LineSelector(_SelectorWidget):
                 self._end_pts[0, :] = x, y
             else:
                 self._end_pts[1, :] = x, y
-        self._update_points()
-        return True
+        self.end_points = self._end_pts
 
     def _on_scroll(self, event):
         if event.button == 'up':
@@ -2390,12 +2475,3 @@ class LineSelector(_SelectorWidget):
         if linewidth > 1:
             self._line.set_linewidth(linewidth - 1)
             self.update()
-
-    def _update_points(self):
-        pts = self._end_pts
-        self._line.set_data(np.transpose(pts))
-
-        if self.interactive:
-            self._center = center = (pts[1] + pts[0]) / 2.
-            handle_pts = np.vstack((pts[0], center, pts[1])).T
-            self._handles.set_data(handle_pts)
