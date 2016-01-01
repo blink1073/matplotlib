@@ -30,7 +30,7 @@ def onselect(xmin, xmax):
     line2.set_data(thisx, thisy)
     ax2.set_xlim(thisx[0], thisx[-1])
     ax2.set_ylim(thisy.min(), thisy.max())
-    fig.canvas.draw()
+    fig.canvas.draw_idle()
 
 # set useblit True on gtkagg for enhanced performance
 span = SpanSelector(ax, onselect, 'horizontal', useblit=True,
