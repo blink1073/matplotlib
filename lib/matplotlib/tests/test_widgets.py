@@ -259,7 +259,6 @@ def test_lasso_selector():
     check_lasso_selector(useblit=True, button=1)
 
 
-
 @cleanup
 def check_line(**kwargs):
     ax = get_ax()
