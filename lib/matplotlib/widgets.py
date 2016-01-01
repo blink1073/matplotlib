@@ -1385,7 +1385,7 @@ class SpanSelector(_SelectorWidget):
 
     def __init__(self, ax, onselect, direction, minspan=None, useblit=False,
                  rectprops=None, onmove_callback=None, span_stays=False,
-                 button=None):
+                 button=None, interactive=False):
         """
         Create a span selector in *ax*.  When a selection is made, clear
         the span and call *onselect* with::
@@ -2271,3 +2271,166 @@ class Lasso(AxesWidget):
             self.canvas.blit(self.ax.bbox)
         else:
             self.canvas.draw_idle()
+
+
+class LineSelector(_SelectorWidget):
+
+    """
+    Selection that is a line with varying thickness.
+
+    Ceate a selector in *ax*.  When a selection is made, clear
+    the span and call *onselect* with::
+
+      onselect(pos_1, pos_2)
+
+    and clear the drawn line. The ``pos_1`` and ``pos_2`` are
+    arrays of length 2 containing the x- and y-coordinate.
+
+    The line is drawn with *lineprops*; default::
+
+      lineprops = dict(color='black', linestyle='-',
+                       linewidth = 2, alpha=0.5)
+
+    *button* is a list of integers indicating which mouse buttons should
+    be used for rectangle selection.  You can also specify a single
+    integer if only a single button is desired.  Default is *None*,
+    which does not limit which button can be used.
+
+    Note, typically:
+     1 = left mouse button
+     2 = center mouse button (scroll wheel)
+     3 = right mouse button
+
+    *interactive* will draw a set of handles and allow you interact
+    with the widget after it is drawn.
+
+    *maxdist* is the maximum distance in pixels for a handle grab.
+
+    *state_modifier_keys* are keyboard modifiers that affect the behavior
+    of the widget.
+
+    The defaults are:
+    dict(move=' ', clear='escape')
+
+    Keyboard modifiers, which:
+    'move': Move the existing shape.
+    'clear': Clear the current shape.
+
+    Use the mouse scroll or `+/-` keys to adjust the thickness of the line.
+    """
+
+    def __init__(self, ax, onselect, useblit=True, button=1,
+                 lineprops=None, interactive=False, maxdist=10,
+                 state_modifier_keys=None):
+
+        super(LineSelector, self).__init__(ax, onselect,
+            useblit=useblit,  button=button,
+            state_modifier_keys=state_modifier_keys)
+
+        props = dict(color='black', linestyle='-', linewidth=2, alpha=0.5)
+        props.update(lineprops if lineprops is not None else {})
+        self.linewidth = props['linewidth']
+        self.maxdist = maxdist
+        self._active_pt = None
+        self._end_pts = np.array([(0, 0), (0, 0)])
+        self.interactive = interactive
+
+        self._line = Line2D((0, 0), (0, 0), animated=True, **props)
+        self.ax.add_line(self._line)
+
+        if self.interactive:
+            x = (0, 0, 0)
+            y = (0, 0, 0)
+            self._handles = ToolHandles(self.ax, x, y, useblit=useblit)
+            self.artists = [self._line, self._handles.artist]
+        else:
+            self.artists = [self._line]
+        self.set_visible(False)
+
+    @property
+    def end_points(self):
+        return self._end_pts.astype(int)
+
+    @end_points.setter
+    def end_points(self, pts):
+
+        self._end_pts = pts = np.asarray(pts)
+        self._line.set_data(np.transpose(pts))
+        self._line.set_linewidth(self.linewidth)
+
+        if self.interactive:
+            self._center = center = (pts[1] + pts[0]) / 2.
+            handle_pts = np.vstack((pts[0], center, pts[1])).T
+            self._handles.set_data(handle_pts)
+
+        self.set_visible(True)
+        self.update()
+
+    def _on_clear(self):
+        self._active_pt = None
+
+    def _press(self, event):
+        if not self.interactive:
+            self._active_pt = 0
+        else:
+            idx, px_dist = self._handles.closest(event.x, event.y)
+            if px_dist < self.maxdist:
+                self._active_pt = idx
+            else:
+                self._active_pt = None
+
+        if event.key == self.state_modifier_keys['move']:
+            self._active_pt = 1
+
+        self.set_visible(True)
+
+        if self._active_pt is None:
+            self._active_pt = 0
+            x, y = event.xdata, event.ydata
+            self._end_pts = np.array([[x, y], [x, y]])
+        self.update()
+
+    def _release(self, event):
+        self._active_pt = None
+        self.onselect(self.eventpress, self.eventrelease)
+        if not self.interactive:
+            self._line.set_visible(False)
+
+    def _onmove(self, event):
+        if self._active_pt is None:
+            return
+        x, y, = event.xdata, event.ydata
+        if x is not None:
+            # check for center
+            if self._active_pt == 1:
+                xc, yc = self._center
+                xo, yo = x - xc, y - yc
+                self._end_pts += [int(xo), int(yo)]
+            elif self._active_pt == 0:
+                self._end_pts[0, :] = x, y
+            else:
+                self._end_pts[1, :] = x, y
+        self.end_points = self._end_pts
+
+    def _on_scroll(self, event):
+        if event.button == 'up':
+            self._thicken_scan_line()
+        elif event.button == 'down':
+            self._shrink_scan_line()
+
+    def _on_key_press(self, event):
+        if event.key == '+':
+            self._thicken_scan_line()
+        elif event.key == '-':
+            self._shrink_scan_line()
+
+    def _thicken_scan_line(self):
+        self.linewidth += 1
+        self._line.set_linewidth(self.linewidth)
+        self.update()
+
+    def _shrink_scan_line(self):
+        if self.linewidth > 1:
+            self.linewidth -= 1
+            self._line.set_linewidth(self.linewidth)
+            self.update()

@@ -257,3 +257,61 @@ def test_lasso_selector():
     check_lasso_selector()
     check_lasso_selector(useblit=False, lineprops=dict(color='red'))
     check_lasso_selector(useblit=True, button=1)
+
+
+
+@cleanup
+def check_line(**kwargs):
+    ax = get_ax()
+
+    def onselect(epress, erelease):
+        ax._got_onselect = True
+        assert epress.xdata == 100
+        assert epress.ydata == 100
+        assert erelease.xdata == 200
+        assert erelease.ydata == 200
+
+    tool = widgets.LineSelector(ax, onselect, **kwargs)
+    do_event(tool, 'press', xdata=100, ydata=100, button=1)
+    do_event(tool, 'onmove', xdata=199, ydata=199, button=1)
+
+    # purposely drag outside of axis for release
+    do_event(tool, 'release', xdata=250, ydata=250, button=1)
+
+    assert ax._got_onselect
+
+
+def test_line():
+    check_line(useblit=False, interactive=True)
+    check_line(useblit=True, button=1)
+
+
+@cleanup
+def test_line_handles():
+    ax = get_ax()
+
+    def onselect(epress, erelease):
+        pass
+
+    tool = widgets.LineSelector(ax, onselect=onselect,
+                                maxdist=10, interactive=True)
+    tool.end_points = [(100, 100), (150, 150)]
+    assert_allclose(tool.end_points, [(100, 100), (150, 150)])
+
+    # grab a corner and move it
+    do_event(tool, 'press', xdata=100, ydata=100)
+    do_event(tool, 'onmove', xdata=120, ydata=120)
+    do_event(tool, 'release', xdata=120, ydata=120)
+    assert_allclose(tool.end_points, [(120, 120), (150, 150)])
+
+    # grab the center and move it
+    do_event(tool, 'press', xdata=132, ydata=132)
+    do_event(tool, 'onmove', xdata=120, ydata=120)
+    do_event(tool, 'release', xdata=120, ydata=120)
+    assert_allclose(tool.end_points, [(105, 105), (135, 135)])
+
+    # create a new rectangle
+    do_event(tool, 'press', xdata=10, ydata=10)
+    do_event(tool, 'onmove', xdata=100, ydata=100)
+    do_event(tool, 'release', xdata=100, ydata=100)
+    assert_allclose(tool.end_points, [(100, 100), (10, 10)])
