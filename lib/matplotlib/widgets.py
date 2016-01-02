@@ -66,7 +66,7 @@ class Widget(object):
     """
     Abstract base class for GUI neutral widgets
     """
-    drawon = True
+    drawon = Truec
     eventson = True
     _active = True
 
@@ -1168,7 +1168,7 @@ class _SelectorWidget(AxesWidget):
         if active:
             self.update_background(None)
 
-    def update_background(self, event):
+    def update_background(self, event=None):
         """force an update of the background"""
         # If you add a call to `ignore` here, you'll want to check edge case:
         # `release` can call a draw event even when `ignore` is True.
@@ -1194,23 +1194,24 @@ class _SelectorWidget(AxesWidget):
         if not self.canvas.widgetlock.available(self):
             return True
 
+        event = self._clean_event()
         if not hasattr(event, 'button'):
             event.button = None
 
         # Only do rectangle selection if event was triggered
         # with a desired button
-        if self.validButtons is not None:
-            if event.button not in self.validButtons:
+        if self._buttons is not None:
+            if event.button not in self._buttons:
                 return True
 
         # If no button was pressed yet ignore the event if it was out
         # of the axes
-        if self.eventpress is None:
+        if self._eventpress is None:
             return event.inaxes != self.ax
 
         # If a button was pressed, check if the release-button is the
         # same.
-        if event.button == self.eventpress.button:
+        if event.button == self._eventpress.button:
             return False
 
         # If a button was pressed, check if the release-button is the
@@ -1237,6 +1238,15 @@ class _SelectorWidget(AxesWidget):
         else:
             self.canvas.draw_idle()
         return False
+
+    def finish(self):
+        if self.interactive:
+            for artist in self.artists:
+                artist.set_animated(False)
+        else:
+            for artist in self.artists:
+                artist.set_visible(False)
+        self.canvas.draw_idle()
 
     def _get_data(self, event):
         """Get the xdata and ydata for event, with limits"""
@@ -1277,7 +1287,15 @@ class _SelectorWidget(AxesWidget):
             # move state is locked in on a button press
             if key == self.state_modifier_keys['move']:
                 self.state.add('move')
+            if self.interactive:
+                for artist in self.artists:
+                    artist.set_visible(False)
+                self.canvas.draw()
+            for artist in self.artists:
+                artist.set_animated(self.useblit)
+                artist.set_visible(True)
             self._press(event)
+            self.update()
             return True
         return False
 
@@ -1816,16 +1834,8 @@ class RectangleSelector(_SelectorWidget):
         else:
             self.active_handle = None
 
-        if self.active_handle is None or not self.interactive:
-            # Clear previous rectangle before drawing new rectangle.
-            self.update()
-
-        self.set_visible(self.visible)
-
     def _release(self, event):
         """on button release event"""
-        if not self.interactive:
-            self.to_draw.set_visible(False)
 
         if self.spancoords == 'data':
             xmin, ymin = self.eventpress.xdata, self.eventpress.ydata
@@ -1869,12 +1879,13 @@ class RectangleSelector(_SelectorWidget):
 
         self.onselect(self.eventpress, self.eventrelease)
                                               # call desired function
-        self.update()
+        self.finish()
 
         return False
 
     def _onmove(self, event):
         """on motion notify event if box/line is wanted"""
+        self.set_visible(True)
         # resize an existing shape
         if self.active_handle and not self.active_handle == 'C':
             x1, x2, y1, y2 = self._extents_on_press
@@ -1982,7 +1993,6 @@ class RectangleSelector(_SelectorWidget):
         self._corner_handles.set_data(*self.corners)
         self._edge_handles.set_data(*self.edge_centers)
         self._center_handle.set_data(*self.center)
-        self.set_visible(self.visible)
         self.update()
 
     def draw_shape(self, extents):
