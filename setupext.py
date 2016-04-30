@@ -177,7 +177,8 @@ def get_base_dirs():
         return os.environ.get('MPLBASEDIRLIST').split(os.pathsep)
 
     win_bases = ['win32_static', ]
-    # on conda windows, we also add the <installdir>\Library of the local interpreter,
+
+    # on conda windows, we also add the <installdir>\Library of the local interperter,
     # as conda installs libs/includes there
     if os.getenv('CONDA_DEFAULT_ENV'):
         win_bases.append(os.path.join(os.getenv('CONDA_DEFAULT_ENV'), "Library"))
@@ -676,6 +677,7 @@ class Matplotlib(SetupPackage):
                 'backends/web_backend/jquery/css/themes/base/*.min.css',
                 'backends/web_backend/jquery/css/themes/base/images/*',
                 'backends/web_backend/css/*.*',
+                'backends/web_backend/nbextension/*.js',
                 'backends/Matplotlib.nib/*',
                 'mpl-data/stylelib/*.mplstyle',
              ]}
